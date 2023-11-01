@@ -3,7 +3,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     env,
-    fs::{self, File},
+    fs::{self, File, rename},
     io::{self, stdin, Read, Write},
     path::{Path, PathBuf},
 };
@@ -26,6 +26,11 @@ fn main() -> io::Result<()> {
     } else {
         trash_location = proc_toml().unwrap();
     }
+    let path_location = Path::new(trash_location.as_str());
+    if !path_location.exists() {
+        fs::create_dir_all(path_location)?;
+    }
+    env::set_var("tl", trash_location);
     run();
     Ok(())
 }
@@ -119,8 +124,12 @@ fn run() {
         )
         .get_matches();
     let args = matches.get_many::<String>("file(s)").unwrap_or_default().map(|v| v.as_str()).collect::<Vec<_>>();
-    for arg in args {
-        let p = Path::new(arg);
-        fs::remove_file(p.absolutize().unwrap().to_str().unwrap()).unwrap();
+    remove(args);
+}
+fn remove(files: Vec<&str>) {
+    let to: PathBuf = PathBuf::from(env::var("tl").unwrap());
+    for file in files {
+        let file_path_abs = Path::new(file).absolutize().unwrap();
+        rename(file_path_abs, to.join(file)).unwrap();
     }
 }
