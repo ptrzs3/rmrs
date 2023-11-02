@@ -1,13 +1,13 @@
 use clap::{self, command, Arg, ArgAction};
+use path_absolutize::Absolutize;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     env,
-    fs::{self, File, rename},
+    fs::{self, rename, File, remove_file},
     io::{self, stdin, Read, Write},
     path::{Path, PathBuf},
 };
-use path_absolutize::Absolutize;
 
 const CONFIG_FILE: &'static str = ".rmrs.toml";
 
@@ -15,7 +15,29 @@ const CONFIG_FILE: &'static str = ".rmrs.toml";
 struct Config {
     location: String,
 }
+/// A struct to store args
+#[derive(Debug)]
+struct UserCommand<T>
+where
+    T: AsRef<str>,
+{
+    files: Vec<T>,
+    f: bool,
+    c: bool,
+    z: bool,
+}
 
+impl<T> UserCommand<T>
+where
+    T: AsRef<str>,
+{
+    fn new(files: Vec<T>, f: bool, c: bool, z: bool) -> UserCommand<T> {
+        Self { files, f, c, z }
+    }
+    fn is_empty(&self) -> bool {
+        self.files.is_empty() & !self.f & !self.c & !self.z
+    }
+}
 #[allow(dead_code)]
 #[allow(unused_variables)]
 #[allow(unused_assignments)]
@@ -122,14 +144,48 @@ fn run() {
                 .long("clear")
                 .help("clear trash"),
         )
+        .arg(
+            Arg::new("regret")
+                .action(ArgAction::SetTrue)
+                .required(false)
+                .short('z')
+                .exclusive(true)
+                .help("recover last deleted file or directory if trash hasn't been cleared"),
+        )
         .get_matches();
-    let args = matches.get_many::<String>("file(s)").unwrap_or_default().map(|v| v.as_str()).collect::<Vec<_>>();
-    remove(args);
+    let args = matches
+        .get_many::<String>("file(s)")
+        .unwrap_or_default()
+        .map(|v| v.as_str())
+        .collect::<Vec<_>>();
+    let f = matches.get_flag("forever");
+    let c = matches.get_flag("clear");
+    let z = matches.get_flag("regret");
+    let user_args = UserCommand::new(args,f,c,z);
+    println!("{:?}", user_args);
+    println!("{}", user_args.is_empty());
+    move_to_trash(user_args.files);
 }
-fn remove(files: Vec<&str>) {
+fn move_to_trash(files: Vec<&str>) {
     let to: PathBuf = PathBuf::from(env::var("tl").unwrap());
     for file in files {
         let file_path_abs = Path::new(file).absolutize().unwrap();
         rename(file_path_abs, to.join(file)).unwrap();
     }
+}
+fn move_forever(files: Vec<&str>) {
+        let to: PathBuf = PathBuf::from(env::var("tl").unwrap());
+    for file in files {
+        let file_path_abs = Path::new(file).absolutize().unwrap();
+        remove_file(file_path_abs).unwrap();
+    }
+}
+fn log() {
+    !todo!()
+}
+fn regret() {
+    todo!()
+}
+fn clear() {
+    todo!()
 }
