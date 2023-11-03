@@ -4,24 +4,27 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
     env,
-    fs::{self, rename, File, remove_file},
+    fs::{self, remove_file, rename, File, OpenOptions},
     io::{self, stdin, Read, Write},
     path::{Path, PathBuf},
 };
-
+use time as Dime;
+use Dime::{format_description, macros::offset};
 const CONFIG_FILE: &'static str = ".rmrs.toml";
 
 #[derive(Deserialize, Serialize)]
 struct Config {
     location: String,
+    confirm: String,
 }
 /// A struct to store args
 #[derive(Debug)]
 struct UserCommand<T>
 where
-    T: AsRef<str>,
+    T: AsRef<Path>,
 {
     files: Vec<T>,
+    dirs: Vec<T>,
     f: bool,
     c: bool,
     z: bool,
@@ -29,30 +32,33 @@ where
 
 impl<T> UserCommand<T>
 where
-    T: AsRef<str>,
+    T: AsRef<Path>,
 {
-    fn new(files: Vec<T>, f: bool, c: bool, z: bool) -> UserCommand<T> {
-        Self { files, f, c, z }
-    }
-    fn is_empty(&self) -> bool {
-        self.files.is_empty() & !self.f & !self.c & !self.z
+    fn new(files: Vec<T>, dirs: Vec<T>, f: bool, c: bool, z: bool) -> UserCommand<T> {
+        Self {
+            files,
+            dirs,
+            f,
+            c,
+            z,
+        }
     }
 }
 #[allow(dead_code)]
 #[allow(unused_variables)]
 #[allow(unused_assignments)]
 fn main() -> io::Result<()> {
-    let mut trash_location = String::new();
-    if let Ok(location) = env::var("TRASH") {
-        trash_location = location;
+    let mut trash_home = String::new();
+    if let Ok(location) = env::var("TRASH_HOME") {
+        trash_home = location;
     } else {
-        trash_location = proc_toml().unwrap();
+        trash_home = proc_toml().unwrap();
     }
-    let path_location = Path::new(trash_location.as_str());
+    let path_location = Path::new(trash_home.as_str());
     if !path_location.exists() {
-        fs::create_dir_all(path_location)?;
+        fs::create_dir_all(path_location.join("files"))?;
     }
-    env::set_var("tl", trash_location);
+    env::set_var("th", trash_home);
     run();
     Ok(())
 }
@@ -89,6 +95,7 @@ fn proc_toml() -> Result<String, String> {
         user_input.pop();
         let mut config: Config = Config {
             location: String::from(""),
+            confirm: String::from("yes"),
         };
         if is_valid_path(&user_input) {
             config.location = user_input;
@@ -149,7 +156,6 @@ fn run() {
                 .action(ArgAction::SetTrue)
                 .required(false)
                 .short('z')
-                .exclusive(true)
                 .help("recover last deleted file or directory if trash hasn't been cleared"),
         )
         .get_matches();
@@ -161,27 +167,110 @@ fn run() {
     let f = matches.get_flag("forever");
     let c = matches.get_flag("clear");
     let z = matches.get_flag("regret");
-    let user_args = UserCommand::new(args,f,c,z);
+    let vec_target_abs = conv_to_abs(args);
+    let (files, dirs) = is_file_or_dir(vec_target_abs);
+    let user_args = UserCommand::new(files, dirs, f, c, z);
     println!("{:?}", user_args);
-    println!("{}", user_args.is_empty());
-    move_to_trash(user_args.files);
-}
-fn move_to_trash(files: Vec<&str>) {
-    let to: PathBuf = PathBuf::from(env::var("tl").unwrap());
-    for file in files {
-        let file_path_abs = Path::new(file).absolutize().unwrap();
-        rename(file_path_abs, to.join(file)).unwrap();
+    if user_args.z {
+        regret();
+    } else if !user_args.files.is_empty() | !user_args.dirs.is_empty() {
+        let path_log: PathBuf = PathBuf::from(env::var("th").unwrap()).join("log");
+        let file_log = OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path_log)
+            .unwrap();
+        if user_args.f {
+            move_forever(user_args.files, file_log);
+        } else {
+            move_to_trash(user_args.files, &file_log, "file");
+            move_to_trash(user_args.dirs, &file_log, "directory");
+        }
+    } else if user_args.c {
+        clear();
     }
 }
-fn move_forever(files: Vec<&str>) {
-        let to: PathBuf = PathBuf::from(env::var("tl").unwrap());
-    for file in files {
-        let file_path_abs = Path::new(file).absolutize().unwrap();
-        remove_file(file_path_abs).unwrap();
+fn conv_to_abs(src: Vec<&str>) -> Vec<PathBuf> {
+    let mut rst: Vec<PathBuf> = Vec::new();
+    for s in src {
+        let t: PathBuf = PathBuf::from(s).absolutize().unwrap().into_owned();
+        rst.push(t);
+    }
+    rst
+}
+fn is_file_or_dir<P>(path: Vec<P>) -> (Vec<P>, Vec<P>)
+where
+    P: AsRef<Path>,
+{
+    let mut dirs: Vec<P> = Vec::new();
+    let mut files: Vec<P> = Vec::new();
+    for p in path {
+        if Path::is_dir(p.as_ref()) {
+            dirs.push(p);
+        } else if Path::is_file(p.as_ref()) {
+            files.push(p);
+        } else {
+            println!("{} not a file or a directory", p.as_ref().display());
+        }
+    }
+    (files, dirs)
+}
+fn move_to_trash(targets: Vec<PathBuf>, mut log: &File, ident: &str) {
+    let to: PathBuf = PathBuf::from(env::var("th").unwrap()).join("files");
+    let time_local = Dime::OffsetDateTime::now_utc()
+        .to_offset(offset!(+8))
+        .format(
+            &format_description::parse(
+                "[year]-[month]-[day] [hour]:[minute]:[second] [offset_hour \
+         sign:mandatory]:[offset_minute]:[offset_second]",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    #[allow(unused_assignments)]
+    let mut log_info = String::new();
+    let user: String = env::var("USER").unwrap();
+    for target in targets {
+        if ident.eq("directory") && env::var("PWD").unwrap().starts_with(target.to_str().unwrap()) {
+            log_info = format!("{} {} tried to delete directory \"{}\" while I refused: Forbid to delete ancestor\n", time_local, &user, target.display());
+            log.write_all(log_info.as_bytes()).unwrap();
+            continue;
+        }
+        match rename(&target, to.join(target.file_name().unwrap())) {
+            Ok(_) => {
+                log_info = format!(
+                    "{} {} deleted {} \"{}\"\n",
+                    time_local,
+                    &user,
+                    ident,
+                    target.display()
+                );
+            }
+            Err(e) => {
+                log_info = format!(
+                    "{} {} tried to delete {} \"{}\" while an error occured: {} \n",
+                    time_local,
+                    &user,
+                    ident,
+                    target.display(),
+                    e
+                );
+                eprintln!("{}", log_info);
+            }
+        }
+        log.write_all(log_info.as_bytes()).unwrap();
     }
 }
-fn log() {
-    !todo!()
+fn move_forever(files: Vec<PathBuf>, log: File) {
+    for file in files {
+        // let file_path_abs = Path::new(file).absolutize().unwrap();
+        remove_file(file).unwrap();
+    }
+}
+fn log<P>(abs_path: P)
+where
+    P: AsRef<Path>,
+{
 }
 fn regret() {
     todo!()
