@@ -1,2 +1,2 @@
 # rmrs
-A practice project, inspired by rip
+A rm-like tool written in Rust.
