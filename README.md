@@ -1,7 +1,7 @@
 # rmrs
 
 
-![rustacean-flat-happy](https://pics-1300084735.cos.ap-nanjing.myqcloud.com/rustacean-flat-happy.png)
+![rustacean-flat-happy](https://pics-1300084735.cos.ap-nanjing.myqcloud.com/rustacean-flat-happy.jpg)
 
 A rm-like tool written in Rust.
 
