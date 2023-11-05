@@ -43,7 +43,7 @@ where
 }
 
 pub fn confirm() -> bool {
-    println!("Are you sure: (Y/N)?");
+    print!("Are you sure? [Y/n] ");
     let mut s: String = String::new();
     stdin().read_line(&mut s).unwrap();
     s.pop();

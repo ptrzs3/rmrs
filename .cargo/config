@@ -1,0 +1,7 @@
+[build]
+target = "x86_64-unknown-linux-musl"
+[profile.release]
+panic = 'abort'
+opt-level = 'z'
+codegen-units = 1
+lto = true
