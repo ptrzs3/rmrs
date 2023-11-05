@@ -32,14 +32,16 @@ fn run() -> Result<(), AppError> {
     let matches = command!()
         .about("A rm-like tool written in rust.")
         .author("ptrzs3 https://github.com/ptrzs3")
-        .help_template("\
+        .help_template(
+            "\
 {about-with-newline}
 version: {version}\n
 author: {author-with-newline}
 {usage-heading} {usage}
 
 {all-args}
-        ")
+        ",
+        )
         .arg(
             Arg::new("targets")
                 .action(ArgAction::Append)
@@ -102,7 +104,7 @@ author: {author-with-newline}
          sign:mandatory]:[offset_minute]:[offset_second]",
         )?)?;
     if user_args.z {
-        regret()
+        regret(&file_log, &time_local)
     } else if !user_args.targets.is_empty() {
         if user_args.f {
             move_to_trash(user_args.targets, &file_log, &time_local, true)
@@ -209,7 +211,7 @@ fn move_to_trash(
     Ok(())
 }
 
-fn regret() -> Result<(), AppError> {
+fn regret(mut log: &File, now: &str) -> Result<(), AppError> {
     let path_last = PathBuf::from(env::var("th").unwrap()).join(".last");
     let f = File::open(&path_last)?;
     let mut reader = BufReader::new(f);
@@ -229,16 +231,39 @@ fn regret() -> Result<(), AppError> {
         for cap in re.captures_iter(&li) {
             v.push(cap[0].to_string());
         }
+        #[allow(unused_assignments)]
+        let mut log_info: String = String::new();
         match fs::rename(&v[0], &v[1]) {
             Ok(_) => {
+                log_info = format!(
+                    "{} {} undid last opeation\n",
+                    now,
+                    env::var("USER").unwrap_or("default".to_string())
+                );
+                log.write_all(log_info.as_bytes())?;
                 remove_file(&path_last)?;
             }
             Err(e) => {
                 match e.kind() {
                     std::io::ErrorKind::NotFound => {
+                        log_info = format!(
+                            "{} {} tried to undo last operation while an error occured: {}\n",
+                            now,
+                            env::var("USER").unwrap_or("default".to_string()),
+                            e.kind().to_string()
+                        );
+                        log.write_all(log_info.as_bytes())?;
                         remove_file(&path_last)?;
                     }
-                    _ => {}
+                    _ => {
+                        log_info = format!(
+                            "{} {} tried to undo last operation while an error occured: {}\n",
+                            now,
+                            env::var("USER").unwrap_or("default".to_string()),
+                            e.kind().to_string()
+                        );
+                        log.write_all(log_info.as_bytes())?;
+                    }
                 }
                 return Err(e.into());
             }
