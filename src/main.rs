@@ -3,7 +3,8 @@ use path_absolutize::Absolutize;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
-    env,
+    env::{self, VarError},
+    fmt::Display,
     fs::{self, remove_dir_all, remove_file, rename, File, OpenOptions},
     io::{self, stdin, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -42,15 +43,80 @@ where
         }
     }
 }
-#[allow(dead_code)]
-#[allow(unused_variables)]
+#[derive(Debug)]
+struct AppError {
+    code: i8,
+    message: String,
+}
+impl Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "code: {}, message: {}", self.code, self.message)
+    }
+}
+impl From<toml::ser::Error> for AppError {
+    fn from(value: toml::ser::Error) -> Self {
+        Self {
+            code: -6,
+            message: value.to_string(),
+        }
+    }
+}
+impl From<std::io::Error> for AppError {
+    fn from(value: std::io::Error) -> Self {
+        let code = match value.kind() {
+            io::ErrorKind::NotFound => -1_i8,
+            io::ErrorKind::PermissionDenied => -2_i8,
+            _ => 0x0f_i8,
+        };
+        Self {
+            code,
+            message: value.kind().to_string(),
+        }
+    }
+}
+impl From<VarError> for AppError {
+    fn from(value: VarError) -> Self {
+        let code = match value {
+            VarError::NotPresent => -4_i8,
+            VarError::NotUnicode(_) => -5_i8,
+        };
+        Self {
+            code,
+            message: value.to_string(),
+        }
+    }
+}
+impl From<Dime::error::Format> for AppError {
+    fn from(value: Dime::error::Format) -> Self {
+        Self {
+            code: -7,
+            message: value.to_string(),
+        }
+    }
+}
+impl From<Dime::error::InvalidFormatDescription> for AppError {
+    fn from(value: Dime::error::InvalidFormatDescription) -> Self {
+        Self {
+            code: -8,
+            message: value.to_string(),
+        }
+    }
+}
+impl From<regex::Error> for AppError {
+    fn from(value: regex::Error) -> Self {
+        Self {
+            code: -9,
+            message: value.to_string(),
+        }
+    }
+}
 #[allow(unused_assignments)]
-fn main() -> io::Result<()> {
+fn main() -> Result<(), AppError> {
     let mut trash_home = String::new();
     if let Ok(location) = env::var("TRASH_HOME") {
         trash_home = location;
     } else {
-        trash_home = proc_toml().unwrap();
+        trash_home = proc_toml()?;
     }
     let trash_can = Path::new(trash_home.as_str()).join("files");
     if !trash_can.exists() {
@@ -58,31 +124,35 @@ fn main() -> io::Result<()> {
     }
     env::set_var("th", trash_home);
     env::set_var("tc", trash_can);
-    run();
-    Ok(())
+    run()
 }
 
-fn proc_toml() -> Result<String, String> {
+fn proc_toml() -> Result<String, AppError> {
     let mut p = PathBuf::new();
-    p.push(env::var("HOME").unwrap());
+    p.push(match env::var("HOME") {
+        Ok(v) => v,
+        Err(e) => {
+            return Err(e.into());
+        }
+    });
     p.push(CONFIG_FILE);
+    // toml exists
     if Path::exists(&p) {
-        let mut conf = File::open(&p).unwrap();
+        let mut conf = File::open(&p)?;
         let mut content = String::new();
-        conf.read_to_string(&mut content).unwrap();
+        conf.read_to_string(&mut content)?;
         if let Ok(config) = toml::from_str::<Config>(&content) {
             return Ok(config.location);
         } else {
-            match fs::remove_file(&p) {
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("{e}");
-                }
-            }
-            Err(format!("broken \"{}\", please rerun", p.to_string_lossy()))
+            fs::remove_file(&p)?;
+            Err(AppError {
+                code: -3_i8,
+                message: format!("broken \"{}\", please rerun", p.to_string_lossy()),
+            })
         }
     } else {
-        let mut conf = File::create(&p).unwrap();
+        let mut conf = File::create(&p)?;
+        // 前面已经处理过Result(env::var)，这里可以放心unwrap
         println!(
             "\t\tLooks like you haven't used rmrs yet\n\
             \t\tThe default trash location would be \"{}/.trash\"\n\
@@ -90,7 +160,7 @@ fn proc_toml() -> Result<String, String> {
             env::var("HOME").unwrap()
         );
         let mut user_input: String = String::new();
-        stdin().read_line(&mut user_input).unwrap();
+        stdin().read_line(&mut user_input)?;
         user_input.pop();
         let mut config: Config = Config {
             location: String::from(""),
@@ -101,9 +171,9 @@ fn proc_toml() -> Result<String, String> {
         } else {
             config.location = format!("{}/.trash", env::var("HOME").unwrap());
         }
-        let content = toml::to_string(&config).unwrap();
-        conf.write_all(content.as_bytes()).unwrap();
-        conf.flush().unwrap();
+        let content = toml::to_string(&config)?;
+        conf.write_all(content.as_bytes())?;
+        conf.flush()?;
         return Ok(config.location);
     }
 }
@@ -118,7 +188,7 @@ fn is_valid_path(p: &str) -> bool {
         }
     }
 }
-fn run() {
+fn run() -> Result<(), AppError> {
     let matches = command!()
         .arg(
             Arg::new("file(s)")
@@ -174,38 +244,43 @@ fn run() {
     let file_log = OpenOptions::new()
         .append(true)
         .create(true)
-        .open(path_log)
-        .unwrap();
+        .open(path_log)?;
+
     let time_local = Dime::OffsetDateTime::now_utc()
         .to_offset(offset!(+8))
-        .format(
-            &format_description::parse(
-                "[year]-[month]-[day] [hour]:[minute]:[second] [offset_hour \
+        .format(&format_description::parse(
+            "[year]-[month]-[day] [hour]:[minute]:[second] [offset_hour \
          sign:mandatory]:[offset_minute]:[offset_second]",
-            )
-            .unwrap(),
-        )
-        .unwrap();
+        )?)?;
+    // .unwrap();
     if user_args.z {
-        regret();
+        regret()
     } else if !user_args.targets.is_empty() {
         if user_args.f {
-            move_to_trash(user_args.targets, &file_log, &time_local, true);
+            move_to_trash(user_args.targets, &file_log, &time_local, true)
         } else {
-            move_to_trash(user_args.targets, &file_log, &time_local, false);
+            move_to_trash(user_args.targets, &file_log, &time_local, false)
         }
     } else if user_args.c {
-        clear(&file_log, &time_local);
+        clear(&file_log, &time_local)
+    } else {
+        Err(AppError {
+            code: 0,
+            message: "Bye~".to_string(),
+        })
     }
 }
+
+/// convert relative(or absolute) path to absoulute path
 fn conv_to_abs(src: Vec<&str>) -> Vec<PathBuf> {
-    let mut rst: Vec<PathBuf> = Vec::new();
+    let mut abs: Vec<PathBuf> = Vec::new();
     for s in src {
         let t: PathBuf = PathBuf::from(s).absolutize().unwrap().into_owned();
-        rst.push(t);
+        abs.push(t);
     }
-    rst
+    abs
 }
+
 #[allow(dead_code)]
 fn is_file_or_dir<P>(path: Vec<P>) -> (Vec<P>, Vec<P>)
 where
@@ -224,27 +299,27 @@ where
     }
     (files, dirs)
 }
-fn move_to_trash(targets: Vec<PathBuf>, mut log: &File, now: &str, permanently: bool) {
+fn move_to_trash(
+    targets: Vec<PathBuf>,
+    mut log: &File,
+    now: &str,
+    permanently: bool,
+) -> Result<(), AppError> {
     let path_last = PathBuf::from(env::var("th").unwrap()).join(".last");
     let mut file_last = OpenOptions::new()
         .create(true)
         .write(true)
-        .open(path_last)
-        .unwrap();
+        .open(path_last)?;
     let to: PathBuf = PathBuf::from(env::var("tc").unwrap());
     #[allow(unused_assignments)]
     let mut info_log = String::new();
     #[allow(unused_assignments)]
     let mut info_last = String::new();
-    let user: String = env::var("USER").unwrap();
+    let user: String = env::var("USER").unwrap_or("default".to_string());
     for target in targets {
-        if target.is_dir()
-            && env::var("PWD")
-                .unwrap()
-                .starts_with(target.to_str().unwrap())
-        {
+        if target.is_dir() && env::var("PWD")?.starts_with(target.to_str().unwrap()) {
             info_log = format!("{} {} tried to delete directory \"{}\" while I refused: Forbid to delete ancestor\n", now, &user, target.display());
-            log.write_all(info_log.as_bytes()).unwrap();
+            log.write_all(info_log.as_bytes())?;
             continue;
         }
         if permanently {
@@ -267,10 +342,10 @@ fn move_to_trash(targets: Vec<PathBuf>, mut log: &File, now: &str, permanently: 
                         target.display(),
                         e
                     );
-                    eprintln!("{}", info_log);
+                    eprintln!("{e}");
                 }
             }
-            log.write_all(info_log.as_bytes()).unwrap();
+            log.write_all(info_log.as_bytes())?;
         } else {
             match check_exist(target.file_name().unwrap().to_string_lossy().into_owned()) {
                 Ok(n) => {
@@ -289,7 +364,7 @@ fn move_to_trash(targets: Vec<PathBuf>, mut log: &File, now: &str, permanently: 
                                 PathBuf::from(env::var("tc").unwrap()).join(&n).display(),
                                 target.display()
                             );
-                            file_last.write_all(info_last.as_bytes()).unwrap();
+                            file_last.write_all(info_last.as_bytes())?;
                         }
                         Err(e) => {
                             info_log = format!(
@@ -300,17 +375,18 @@ fn move_to_trash(targets: Vec<PathBuf>, mut log: &File, now: &str, permanently: 
                                 target.display(),
                                 e
                             );
-                            eprintln!("{}", info_log);
+                            eprintln!("{e}");
                         }
                     }
-                    log.write_all(info_log.as_bytes()).unwrap();
+                    log.write_all(info_log.as_bytes())?;
                 }
-                Err(code) => {
-                    println!("errcode{}", code);
+                Err(e) => {
+                    return Err(e);
                 }
             }
         }
     }
+    Ok(())
 }
 fn get_type(t: &PathBuf) -> String {
     if t.is_dir() {
@@ -331,10 +407,9 @@ fn update_file_name(ori: &str, idx: usize, i: &u16) -> String {
     dst.insert_str(idx, format!("{}", i).as_str());
     dst
 }
-fn check_exist(f: String) -> Result<String, i8> {
+fn check_exist(f: String) -> Result<String, AppError> {
     let to: PathBuf = PathBuf::from(env::var("tc").unwrap()).join(&f);
     let tc: PathBuf = PathBuf::from(env::var("tc").unwrap());
-    println!("{:?}", to);
     if to.exists() {
         println!("exist");
         let idx = prefix(&f);
@@ -342,30 +417,30 @@ fn check_exist(f: String) -> Result<String, i8> {
             .map(|i| update_file_name(&f, idx, &i))
             .find(|n| !tc.join(n).exists())
         {
-            println!("use new name: {}", new_name);
             return Ok(new_name);
         } else {
-            return Err(-1);
+            return Err(AppError {
+                code: -10,
+                message: "number exceed u16".to_string(),
+            });
         }
-    } else {
-        println!("use ori name");
-        return Ok(f);
     }
+    Ok(f)
 }
-fn regret() {
+fn regret() -> Result<(), AppError> {
     let path_last = PathBuf::from(env::var("th").unwrap()).join(".last");
-    let f = File::open(&path_last).unwrap();
+    let f = File::open(&path_last)?;
     let mut reader = BufReader::new(f);
     let mut lines: Vec<String> = vec![];
     let mut line = String::new();
     line.clear();
-    let mut len = reader.read_line(&mut line).unwrap();
-    let re = Regex::new(r"[/+.?_?\-?\w?]+").unwrap();
+    let mut len = reader.read_line(&mut line)?;
+    let re = Regex::new(r"[/+.?_?\-?\w?]+")?;
     while len > 0 {
         line.pop();
         lines.push(line.clone());
         line.clear();
-        len = reader.read_line(&mut line).unwrap();
+        len = reader.read_line(&mut line)?;
     }
     for li in lines {
         let mut v: Vec<String> = Vec::new();
@@ -373,31 +448,36 @@ fn regret() {
             v.push(cap[0].to_string());
         }
         // println!("from: {}, to: {}", v[0], v[1]);
-        fs::rename(&v[0], &v[1]).unwrap();
+        fs::rename(&v[0], &v[1])?;
     }
-    remove_file(&path_last).unwrap();
+    remove_file(&path_last)?;
+    Ok(())
 }
-fn clear(mut log: &File, now: &str) {
+fn clear(mut log: &File, now: &str) -> Result<(), AppError> {
     if confirm() {
         #[allow(unused_assignments)]
         let mut log_info: String = String::new();
         match remove_dir_all(PathBuf::from(env::var("th").unwrap()).join("files")) {
             Ok(_) => {
-                println!("OK");
-                log_info = format!("{} {} cleaned trash can\n", now, env::var("USER").unwrap());
+                log_info = format!(
+                    "{} {} cleaned trash can\n",
+                    now,
+                    env::var("USER").unwrap_or("default".to_string())
+                );
             }
             Err(e) => {
                 log_info = format!(
                     "{} {} tried to clean trash can while an error occured: {}",
                     now,
-                    env::var("USER").unwrap(),
+                    env::var("USER").unwrap_or("default".to_string()),
                     e
                 );
                 eprintln!("{e}");
             }
         }
-        log.write_all(log_info.as_bytes()).unwrap();
+        log.write_all(log_info.as_bytes())?;
     }
+    Ok(())
 }
 fn confirm() -> bool {
     println!("Are you sure: (Y/N)?");
