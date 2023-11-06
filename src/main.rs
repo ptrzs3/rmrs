@@ -145,13 +145,14 @@ fn move_to_trash(
             continue;
         }
         if permanently {
+            let fty = get_type(&target);
             match remove_file(&target) {
                 Ok(_) => {
                     info_log = format!(
                         "{} {} permanently deleted {} \"{}\"\n",
                         now,
                         &user,
-                        get_type(&target),
+                        fty,
                         target.display(),
                     );
                 }
@@ -160,7 +161,7 @@ fn move_to_trash(
                         "{} {} tried to permanently delete {} \"{}\" while an error occured: {} \n",
                         now,
                         &user,
-                        get_type(&target),
+                        fty,
                         target.display(),
                         e
                     );
@@ -171,13 +172,15 @@ fn move_to_trash(
         } else {
             match check_exist(target.file_name().unwrap().to_string_lossy().into_owned()) {
                 Ok(n) => {
+                    let fty = get_type(&target);
                     match rename(&target, to.join(&n)) {
                         Ok(_) => {
                             info_log = format!(
                                 "{} {} deleted {} \"{}\" => {}\n",
                                 now,
                                 &user,
-                                get_type(&target),
+                                // get_type(&target),
+                                fty,
                                 target.display(),
                                 &n
                             );
@@ -193,7 +196,7 @@ fn move_to_trash(
                                 "{} {} tried to delete {} \"{}\" while an error occured: {} \n",
                                 now,
                                 &user,
-                                get_type(&target),
+                                fty,
                                 target.display(),
                                 e
                             );
@@ -236,12 +239,11 @@ fn regret(mut log: &File, now: &str) -> Result<(), AppError> {
         match fs::rename(&v[0], &v[1]) {
             Ok(_) => {
                 log_info = format!(
-                    "{} {} undid last opeation\n",
+                    "{} {} undid last opeation successfully\n",
                     now,
                     env::var("USER").unwrap_or("default".to_string())
                 );
                 log.write_all(log_info.as_bytes())?;
-                remove_file(&path_last)?;
             }
             Err(e) => {
                 match e.kind() {
@@ -253,6 +255,7 @@ fn regret(mut log: &File, now: &str) -> Result<(), AppError> {
                             e.kind().to_string()
                         );
                         log.write_all(log_info.as_bytes())?;
+                        // 发生NotFound错误，删除.last文件
                         remove_file(&path_last)?;
                     }
                     _ => {
@@ -269,6 +272,8 @@ fn regret(mut log: &File, now: &str) -> Result<(), AppError> {
             }
         }
     }
+    // 全部成功恢复，删除.last文件
+    remove_file(&path_last)?;
     Ok(())
 }
 

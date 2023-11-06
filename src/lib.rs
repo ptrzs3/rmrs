@@ -1,7 +1,7 @@
 use std::{
     env,
     fs::{self, File},
-    io::{stdin, Read, Write},
+    io::{stdin, Read, Write, stdout},
     path::{Path, PathBuf},
 };
 pub mod error;
@@ -44,10 +44,10 @@ where
 
 pub fn confirm() -> bool {
     print!("Are you sure? [Y/n] ");
+    stdout().flush().unwrap();
     let mut s: String = String::new();
     stdin().read_line(&mut s).unwrap();
-    s.pop();
-    return s.eq("Y");
+    return s.eq("Y\n");
 }
 pub fn check_exist(f: String) -> Result<String, AppError> {
     let to: PathBuf = PathBuf::from(env::var("tc").unwrap()).join(&f);
@@ -103,8 +103,11 @@ pub fn is_valid_path(p: &str) -> bool {
 pub fn get_type(t: &PathBuf) -> String {
     if t.is_dir() {
         return "directory".to_string();
+    } else if t.is_file(){
+        return "file".to_string();   
+    } else {
+        return "undefined type".to_string();
     }
-    return "file".to_string();
 }
 
 pub fn proc_toml() -> Result<String, AppError> {
