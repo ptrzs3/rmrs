@@ -14,17 +14,15 @@ use Dime::{format_description, macros::offset};
 #[allow(unused_assignments)]
 fn main() -> Result<(), AppError> {
     let mut trash_home = String::new();
-    if let Ok(location) = env::var("TRASH_HOME") {
-        trash_home = location;
-    } else {
-        trash_home = proc_toml()?;
-    }
+    let mut confirm_again = true;
+    (trash_home, confirm_again)  = proc_toml()?;
     let trash_can = Path::new(trash_home.as_str()).join("files");
     if !trash_can.exists() {
         fs::create_dir_all(&trash_can)?;
     }
     env::set_var("th", trash_home);
     env::set_var("tc", trash_can);
+    env::set_var("ca", confirm_again.to_string());
     run()
 }
 

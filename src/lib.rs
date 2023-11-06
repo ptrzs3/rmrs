@@ -14,7 +14,7 @@ const CONFIG_FILE: &'static str = ".rmrs.toml";
 #[derive(Deserialize, Serialize)]
 pub struct Config {
     pub location: String,
-    pub confirm: String,
+    pub need_confirm_again: bool,
 }
 /// A struct to store args
 #[derive(Debug)]
@@ -43,6 +43,9 @@ where
 }
 
 pub fn confirm() -> bool {
+    if env::var("ca").unwrap().eq("false") {
+        return true;
+    }
     print!("Are you sure? [Y/n] ");
     stdout().flush().unwrap();
     let mut s: String = String::new();
@@ -110,7 +113,7 @@ pub fn get_type(t: &PathBuf) -> String {
     }
 }
 
-pub fn proc_toml() -> Result<String, AppError> {
+pub fn proc_toml() -> Result<(String, bool), AppError> {
     let mut p = PathBuf::new();
     p.push(match env::var("HOME") {
         Ok(v) => v,
@@ -124,7 +127,7 @@ pub fn proc_toml() -> Result<String, AppError> {
         let mut content = String::new();
         conf.read_to_string(&mut content)?;
         if let Ok(config) = toml::from_str::<Config>(&content) {
-            return Ok(config.location);
+            return Ok((config.location, config.need_confirm_again));
         } else {
             fs::remove_file(&p)?;
             Err(AppError {
@@ -146,7 +149,7 @@ pub fn proc_toml() -> Result<String, AppError> {
         user_input.pop();
         let mut config: Config = Config {
             location: String::from(""),
-            confirm: String::from("yes"),
+            need_confirm_again: true,
         };
         if is_valid_path(&user_input) {
             config.location = user_input;
@@ -156,6 +159,6 @@ pub fn proc_toml() -> Result<String, AppError> {
         let content = toml::to_string(&config)?;
         conf.write_all(content.as_bytes())?;
         conf.flush()?;
-        return Ok(config.location);
+        return Ok((config.location, config.need_confirm_again));
     }
 }
