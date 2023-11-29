@@ -4,6 +4,7 @@ use std::{
     io::{stdin, Read, Write, stdout},
     path::{Path, PathBuf},
 };
+pub mod unify;
 pub mod error;
 use error::AppError;
 use path_absolutize::Absolutize;
@@ -115,7 +116,13 @@ pub fn get_type(t: &PathBuf) -> String {
 
 pub fn proc_toml() -> Result<(String, bool), AppError> {
     let mut p = PathBuf::new();
-    p.push(match env::var("HOME") {
+    let envv = unify::ENVV {
+        #[cfg(not(target_os="windows"))]
+        home:  String::from("HOME"),
+        #[cfg(target_os="windows")]
+        home: String::from("HOMEPATH"),
+    };
+    p.push(match env::var(&envv.home) {
         Ok(v) => v,
         Err(e) => {
             return Err(e.into());
@@ -138,19 +145,11 @@ pub fn proc_toml() -> Result<(String, bool), AppError> {
     } else {
         let mut conf = File::create(&p)?;
         // 前面已经处理过Result(env::var)，这里可以放心unwrap
-        #[cfg(not(target_os="macos"))]
-        println!(
-            "\tLooks like you haven't used rmrs yet\n\
-            \tThe default trash location would be \"{}/.trash\"\n\
-        \tor you may input customized trash location(absolute):",
-            env::var("HOME").unwrap()
-        );
-        #[cfg(target_os="macos")]
         println!(
             "\tLooks like you haven't used rmrs yet\n\
             \tThe default trash location would be \"{}/.rtrash\"\n\
-            \tor you may input customized trash location(absolute):",
-            env::var("HOME").unwrap()
+        \tor you may input customized trash location(absolute):",
+            env::var(&envv.home).unwrap()
         );
         let mut user_input: String = String::new();
         stdin().read_line(&mut user_input)?;
@@ -162,11 +161,7 @@ pub fn proc_toml() -> Result<(String, bool), AppError> {
         if is_valid_path(&user_input) {
             config.location = user_input;
         } else {
-            if cfg!(not(target_os="macos")) {
-                config.location = format!("{}/.trash", env::var("HOME").unwrap());
-            } else {
-                config.location = format!("{}/.rtrash", env::var("HOME").unwrap());
-            }
+            config.location = format!("{}/.rtrash", env::var(&envv.home).unwrap());
         }
         let content = toml::to_string(&config)?;
         conf.write_all(content.as_bytes())?;

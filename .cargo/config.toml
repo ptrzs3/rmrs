@@ -1,5 +1,15 @@
 # [build]
 # target = "x86_64-unknown-linux-musl"
+
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+
+[target.x86_64-unknown-linux-gnu]
+linker = "cc"
+
+[target.x86_64-apple-darwin]
+linker = "cc"
+
 [profile.release]
 panic = 'abort'
 opt-level = 'z'

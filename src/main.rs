@@ -112,10 +112,7 @@ author: {author-with-newline}
     } else if user_args.c {
         clear(&file_log, &time_local)
     } else {
-        Err(AppError {
-            code: 0,
-            message: "Bye~".to_string(),
-        })
+        Ok(())
     }
 }
 
