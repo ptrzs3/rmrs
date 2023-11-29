@@ -138,10 +138,18 @@ pub fn proc_toml() -> Result<(String, bool), AppError> {
     } else {
         let mut conf = File::create(&p)?;
         // 前面已经处理过Result(env::var)，这里可以放心unwrap
+        #[cfg(not(target_os="macos"))]
         println!(
-            "\t\tLooks like you haven't used rmrs yet\n\
-            \t\tThe default trash location would be \"{}/.trash\"\n\
-        \t\tor you may input customized trash location(absolute):",
+            "\tLooks like you haven't used rmrs yet\n\
+            \tThe default trash location would be \"{}/.trash\"\n\
+        \tor you may input customized trash location(absolute):",
+            env::var("HOME").unwrap()
+        );
+        #[cfg(target_os="macos")]
+        println!(
+            "\tLooks like you haven't used rmrs yet\n\
+            \tThe default trash location would be \"{}/.rtrash\"\n\
+            \tor you may input customized trash location(absolute):",
             env::var("HOME").unwrap()
         );
         let mut user_input: String = String::new();
@@ -154,7 +162,11 @@ pub fn proc_toml() -> Result<(String, bool), AppError> {
         if is_valid_path(&user_input) {
             config.location = user_input;
         } else {
-            config.location = format!("{}/.trash", env::var("HOME").unwrap());
+            if cfg!(not(target_os="macos")) {
+                config.location = format!("{}/.trash", env::var("HOME").unwrap());
+            } else {
+                config.location = format!("{}/.rtrash", env::var("HOME").unwrap());
+            }
         }
         let content = toml::to_string(&config)?;
         conf.write_all(content.as_bytes())?;
