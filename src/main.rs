@@ -1,6 +1,6 @@
 use clap::{self, command, Arg, ArgAction};
 use regex::Regex;
-use rmrs::{check_exist, confirm, update_file_mtime, change_file_permissions};
+use rmrs::{check_exist, confirm, update_file_mtime, change_file_permissions, get_dir_size, friendly_size};
 use rmrs::{conv_to_abs, error::AppError, get_type, proc_toml, UserCommand};
 use std::fs::read_dir;
 use std::os::unix::fs::PermissionsExt;
@@ -116,7 +116,7 @@ author: {author-with-newline}
     if user_args.z {
         regret(&file_log, &time_local)
     } else if user_args.b {
-        todo!()
+        show_trash()
     } else if !user_args.targets.is_empty() {
         if user_args.f {
             move_to_trash(user_args.targets, &file_log, &time_local, true)
@@ -130,16 +130,24 @@ author: {author-with-newline}
     }
 }
 
-#[allow(dead_code, unused_variables, unused_mut)]
-fn show_trash() -> Result<u64, AppError>{
+fn show_trash() -> Result<(), AppError>{
     let trash_can = PathBuf::from(env::var("tc").unwrap());
-    let mut total_size: u16 = 0;
-    for entries in read_dir(trash_can)? {
-        let mut size: u16 = 0;
-        entries.unwrap().path().is_dir()
-        
+    let mut total_size: u64 = 0;
+    for entry in read_dir(trash_can)? {
+        let mut size: u64 = 0;
+        let pb = entry?.path();
+        let md = &pb.metadata().unwrap();
+        if pb.is_file() {
+            size = md.len();
+        } else if pb.is_dir() {
+            size = get_dir_size(&pb).unwrap();
+        }
+        total_size = total_size + size;
+        let st_mode_perms = md.permissions().mode() % 512;
+        let name = pb.file_name().unwrap().to_str().unwrap();
+        println!("${:0<3o} {} {}", st_mode_perms, name, friendly_size(size));
     }
-    Ok(4)
+    Ok(())
 }
 
 fn move_to_trash(
@@ -201,7 +209,11 @@ fn move_to_trash(
                         Ok(_) => {
                             let st_mode_perms = to.metadata()?.permissions().mode();
                             let fp = to.to_str().unwrap();
-                            change_file_permissions(fp, 0o000).unwrap();
+                            let mut mode: u16 = 0o000;
+                            if to.is_dir() {
+                                mode = 0o600;
+                            }
+                            change_file_permissions(fp, mode).unwrap();
                             update_file_mtime(fp, timestamp_now).unwrap();
                             info_log = format!(
                                 "{} {} deleted {} \"{}\" ${:o}$ => {}\n",
@@ -269,7 +281,8 @@ fn regret(mut log: &File, now: &str) -> Result<(), AppError> {
         let mut log_info: String = String::new();
         match fs::rename(&v[0], &v[1]) {
             Ok(_) => {
-                change_file_permissions(&v[1], u32::from_str_radix(&perms_cap[1], 8).unwrap()).unwrap();
+                #[cfg(target_os="macos")]
+                change_file_permissions(&v[1], u16::from_str_radix(&perms_cap[1], 8).unwrap()).unwrap();
                 log_info = format!(
                     "{} {} undid last opeation successfully\n",
                     now,

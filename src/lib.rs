@@ -3,6 +3,7 @@ use libc::time_t;
 use libc::{chmod, mode_t};
 use libc::{utimbuf, utime};
 use std::ffi::CString;
+use std::io;
 use std::{
     env,
     fs::{self, File},
@@ -73,6 +74,30 @@ pub fn change_file_permissions(file_path: &str, mode: mode_t) -> Result<(), Stri
     } else {
         Err("Failed to change file permissions".to_string())
     }
+}
+
+pub fn get_dir_size(pb: &PathBuf) -> io::Result<u64> {
+    let mut dir_size: u64 = 0;
+    for p in fs::read_dir(pb)? {
+        let pt = p?.path();
+        if pt.is_file() {
+            dir_size = dir_size + pt.metadata()?.len();
+        } else if pt.is_dir() {
+            dir_size = dir_size + get_dir_size(&pt)?;
+        }
+    }
+    Ok(dir_size)
+}
+
+pub fn friendly_size(size: u64) -> String {
+    let units: Vec<&str> = vec!["Bytes", "KB", "MB", "GB", "TB", "PB"];
+    let mut ptr: usize = 0;
+    let mut fsize: f64 = size as f64;
+    while fsize >= 1000.00 {
+        fsize = fsize / 1000.00;
+        ptr = ptr + 1;
+    }
+    format!("{:.2} {}", fsize, units[ptr])
 }
 
 pub fn confirm() -> bool {
