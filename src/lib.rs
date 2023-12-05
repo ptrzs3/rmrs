@@ -1,3 +1,8 @@
+extern crate libc;
+use libc::time_t;
+use libc::{chmod, mode_t};
+use libc::{utimbuf, utime};
+use std::ffi::CString;
 use std::{
     env,
     fs::{self, File},
@@ -27,19 +32,46 @@ where
     pub f: bool,
     pub c: bool,
     pub z: bool,
+    pub b: bool,
 }
 
 impl<T> UserCommand<T>
 where
     T: AsRef<Path>,
 {
-    pub fn new(files: Vec<T>, f: bool, c: bool, z: bool) -> UserCommand<T> {
+    pub fn new(files: Vec<T>, f: bool, c: bool, z: bool, b: bool) -> UserCommand<T> {
         Self {
             targets: files,
             f,
             c,
             z,
+            b,
         }
+    }
+}
+pub fn update_file_mtime(file_path: &str, new_mtime: time_t) -> Result<(), String> {
+    let path = CString::new(file_path).map_err(|_| "CString::new failed")?;
+    let times = utimbuf {
+        actime: new_mtime,   // 访问时间
+        modtime: new_mtime,  // 修改时间
+    };
+
+    let ret = unsafe { utime(path.as_ptr(), &times) };
+    if ret == 0 {
+        Ok(())
+    } else {
+        Err("utime failed".to_string())
+    }
+}
+
+pub fn change_file_permissions(file_path: &str, mode: mode_t) -> Result<(), String> {
+    let c_file_path = CString::new(file_path).map_err(|_| "Failed to create CString")?;
+
+    let result = unsafe { chmod(c_file_path.as_ptr(), mode) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err("Failed to change file permissions".to_string())
     }
 }
 

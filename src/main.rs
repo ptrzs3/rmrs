@@ -1,7 +1,10 @@
 use clap::{self, command, Arg, ArgAction};
 use regex::Regex;
-use rmrs::{check_exist, confirm};
+use rmrs::{check_exist, confirm, update_file_mtime, change_file_permissions};
 use rmrs::{conv_to_abs, error::AppError, get_type, proc_toml, UserCommand};
+use std::fs::read_dir;
+use std::os::unix::fs::PermissionsExt;
+use std::time::SystemTime;
 use std::{
     env::{self},
     fs::{self, remove_dir_all, remove_file, rename, File, OpenOptions},
@@ -78,6 +81,14 @@ author: {author-with-newline}
                 .long("undo")
                 .help("Undo the last operation if trash hasn't been cleared"),
         )
+        .arg(
+            Arg::new("browse")
+            .action(ArgAction::SetTrue)
+            .required(false)
+            .short('b')
+            .long("browse")
+            .help("show trash info"),
+        )
         .get_matches();
     let args = matches
         .get_many::<String>("targets")
@@ -87,8 +98,9 @@ author: {author-with-newline}
     let f = matches.get_flag("forever");
     let c = matches.get_flag("clear");
     let z = matches.get_flag("regret");
+    let b = matches.get_flag("browse");
     let vec_target_abs = conv_to_abs(args);
-    let user_args = UserCommand::new(vec_target_abs, f, c, z);
+    let user_args = UserCommand::new(vec_target_abs, f, c, z, b);
     let path_log: PathBuf = PathBuf::from(env::var("th").unwrap()).join("log");
     let file_log = OpenOptions::new()
         .append(true)
@@ -103,6 +115,8 @@ author: {author-with-newline}
         )?)?;
     if user_args.z {
         regret(&file_log, &time_local)
+    } else if user_args.b {
+        todo!()
     } else if !user_args.targets.is_empty() {
         if user_args.f {
             move_to_trash(user_args.targets, &file_log, &time_local, true)
@@ -116,6 +130,18 @@ author: {author-with-newline}
     }
 }
 
+#[allow(dead_code, unused_variables, unused_mut)]
+fn show_trash() -> Result<u64, AppError>{
+    let trash_can = PathBuf::from(env::var("tc").unwrap());
+    let mut total_size: u16 = 0;
+    for entries in read_dir(trash_can)? {
+        let mut size: u16 = 0;
+        entries.unwrap().path().is_dir()
+        
+    }
+    Ok(4)
+}
+
 fn move_to_trash(
     targets: Vec<PathBuf>,
     mut log: &File,
@@ -127,12 +153,13 @@ fn move_to_trash(
         .create(true)
         .write(true)
         .open(path_last)?;
-    let to: PathBuf = PathBuf::from(env::var("tc").unwrap());
+    // let to: PathBuf = PathBuf::from(env::var("tc").unwrap());
     #[allow(unused_assignments)]
     let mut info_log = String::new();
     #[allow(unused_assignments)]
     let mut info_last = String::new();
     let user: String = env::var("USER").unwrap_or("default".to_string());
+    let timestamp_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs() as i64;
     for target in targets {
         if target.is_dir() && env::var("PWD")?.starts_with(target.to_str().unwrap()) {
             info_log = format!("{} {} tried to delete directory \"{}\" while I refused: Forbid to delete ancestor\n", now, &user, target.display());
@@ -168,21 +195,28 @@ fn move_to_trash(
             match check_exist(target.file_name().unwrap().to_string_lossy().into_owned()) {
                 Ok(n) => {
                     let fty = get_type(&target);
-                    match rename(&target, to.join(&n)) {
+                    // let dst = to.join(&n);
+                    let to = PathBuf::from(env::var("tc").unwrap()).join(&n);
+                    match rename(&target, &to) {
                         Ok(_) => {
+                            let st_mode_perms = to.metadata()?.permissions().mode();
+                            let fp = to.to_str().unwrap();
+                            change_file_permissions(fp, 0o000).unwrap();
+                            update_file_mtime(fp, timestamp_now).unwrap();
                             info_log = format!(
-                                "{} {} deleted {} \"{}\" => {}\n",
+                                "{} {} deleted {} \"{}\" ${:o}$ => {}\n",
                                 now,
                                 &user,
-                                // get_type(&target),
                                 fty,
                                 target.display(),
+                                st_mode_perms%512,
                                 &n
                             );
                             info_last = format!(
-                                "{} >> {}\n",
+                                "{} >> {} ${:o}$\n",
                                 PathBuf::from(env::var("tc").unwrap()).join(&n).display(),
-                                target.display()
+                                target.display(),
+                                st_mode_perms%512,
                             );
                             file_last.write_all(info_last.as_bytes())?;
                         }
@@ -217,7 +251,8 @@ fn regret(mut log: &File, now: &str) -> Result<(), AppError> {
     let mut line = String::new();
     line.clear();
     let mut len = reader.read_line(&mut line)?;
-    let re = Regex::new(r"[/+.?_?\-?\w?]+")?;
+    let re_paths = Regex::new(r"/{1,1}[/+.?_?,?\-?\w?]+")?;
+    let re_perms = Regex::new(r"\$([0-9]{3})\$$")?;
     while len > 0 {
         line.pop();
         lines.push(line.clone());
@@ -226,13 +261,15 @@ fn regret(mut log: &File, now: &str) -> Result<(), AppError> {
     }
     for li in lines {
         let mut v: Vec<String> = Vec::new();
-        for cap in re.captures_iter(&li) {
+        for cap in re_paths.captures_iter(&li) {
             v.push(cap[0].to_string());
         }
+        let perms_cap = re_perms.captures(&li).unwrap();
         #[allow(unused_assignments)]
         let mut log_info: String = String::new();
         match fs::rename(&v[0], &v[1]) {
             Ok(_) => {
+                change_file_permissions(&v[1], u32::from_str_radix(&perms_cap[1], 8).unwrap()).unwrap();
                 log_info = format!(
                     "{} {} undid last opeation successfully\n",
                     now,
