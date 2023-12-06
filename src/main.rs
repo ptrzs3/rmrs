@@ -209,6 +209,9 @@ fn move_to_trash(
                         Ok(_) => {
                             let st_mode_perms = to.metadata()?.permissions().mode();
                             let fp = to.to_str().unwrap();
+                            #[cfg(target_os="linux")]
+                            let mut mode: u32 = 0o000;
+                            #[cfg(target_os="macos")]
                             let mut mode: u16 = 0o000;
                             if to.is_dir() {
                                 mode = 0o600;
